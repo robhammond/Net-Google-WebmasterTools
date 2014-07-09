@@ -4,6 +4,7 @@ use warnings;
 
 use DateTime;
 use Data::Dumper;
+use Text::CSV::Slurp;
 use Mojo::UserAgent;
 use Mojo::DOM;
 use Mojo::Util qw(url_escape decode);
@@ -40,21 +41,32 @@ my $home = Mojo::Home->new;
 $home->detect;
 my $cur_dir = $home->rel_dir('./');
 
-
 my $log = Mojo::Log->new;
 
+# required - email & pass
 
 sub new {
     my $class = shift;
     my $self = { @_ };
 
+    $log->error("No email provided!") if !$self->{'email'};
+    $log->error("No password provided!") if !$self->{'pass'};
+    
+    if (!$self->{'from'} || !$self->{'to'}) {
+    	$log->error("No date parameter passed");
+    }
+    $self->{'from'} =~ s!-!!g;
+    $self->{'to'}   =~ s!-!!g;
+
     $self->{'host'} = 'https://www.google.com';
 	$self->{'service_uri'} = '/webmasters/tools/';
 
+	$self->{'_language'} = $self->{'language'} || 'en'; # *  @param $str     String   Valid ISO 639-1 language code, supported by Google.
+    $self->{'_daterange'} = [$self->{'from'}, $self->{'to'}];
+    $self->{'_savepath'} = $self->{'savepath'} || $cur_dir;
+
     $self->{'_auth'} = 0;
 	$self->{'_logged_in'} = 0;
-	$self->{'_language'} = "en";
-	$self->{'_daterange'} = [];
 	$self->{'_tables'} = [
 		"TOP_PAGES", 
 		"TOP_QUERIES",
@@ -89,14 +101,6 @@ sub new {
     bless ($self, $class);
 
     return $self;
-}
-
-# *  Sets content language.
-# *  @param $str     String   Valid ISO 639-1 language code, supported by Google.
-
-sub SetLanguage {
-	my ($self, $str) = @_;
-	$self->{'_language'} = $str;
 }
 
 # *  Sets features that should be downloaded.
@@ -136,28 +140,6 @@ sub SetTables {
 	}
 }
 
-# *  Sets daterange for download data.
-# *  @param $arr     Array   Array containing two ISO 8601 formatted date strings.
-
-sub SetDaterange {
-	my ($self, $arr) = @_;
-
-	if (scalar @$arr == 2) {
-		# if (self::IsISO8601($arr[0]) === true &&
-		  # self::IsISO8601($arr[1]) === true) {
-		my $date1 = $arr->[0];
-		$date1 =~ s!-!!g;
-		$log->info($date1);
-		my $date2 = $arr->[1];
-		$date2 =~ s!-!!g;
-		$self->{'_daterange'} = [$date1, $date2];
-		return 1;
-		# } else { throw new Exception("Invalid argument given."); }
-	} else { 
-		$log->error("Invalid argument given."); 
-	}
-}
-
 # Returns array of downloaded filenames.
 # @return  Array   Array of filenames that have been written to disk.
 
@@ -181,16 +163,16 @@ sub GetSkippedFiles {
 # 		 *                   else false.
 
 sub LogIn {
-	my ($self, $email, $pwd) = @_;
+	my ($self) = @_;
 
 	my $url = $self->{'host'} . '/accounts/ClientLogin';
 
 	my $postRequest = {
 		'accountType' => 'HOSTED_OR_GOOGLE',
-		'Email' => $email,
-		'Passwd' => $pwd,
+		'Email' => $self->{'email'},
+		'Passwd' => $self->{'pass'},
 		'service' => "sitemaps",
-		'source' => "Google-WMTdownloadscript-0.1-pl"
+		'source' => "Google-WMTdownload-0.1-pl",
 	};
 
 	my $ua = Mojo::UserAgent->new;
@@ -357,6 +339,60 @@ sub DownloadCSV {
 	}
 }
 
+# Downloads the file based on the given URL.
+# *  @param $site    String   Site URL available in GWT Account.
+# *  @param $savepath  String   Optional path to save CSV to (no trailing slash!).
+
+sub DownloadData {
+	my ($self, $site) = @_;
+
+	my $savepath = $cur_dir;
+
+	if ($self->{'_logged_in'} == 1) {
+		my $downloadUrls = $self->GetDownloadUrls($site);
+
+		my $tables = $self->{'_tables'};
+
+		for my $table (@$tables) {
+
+			if ($table eq "CRAWL_ERRORS") {
+				$self->DownloadCSV_CrawlErrors($site, $savepath);
+			}
+			elsif ($table eq "CONTENT_ERRORS") {
+				$self->DownloadData_XTRA($site, $savepath,
+				  "html-suggestions", "\)", "CONTENT_ERRORS", "content-problems-type-dl");
+			}
+			elsif ($table eq "CONTENT_KEYWORDS") {
+				$self->DownloadData_XTRA($site, $savepath,
+				  "keywords", "\)", "CONTENT_KEYWORDS", "content-words-dl");
+			}
+			elsif ($table eq "INTERNAL_LINKS") {
+				$self->DownloadData_XTRA($site, $savepath,
+				  "internal-links", "\)", "INTERNAL_LINKS", "internal-links-dl");
+			}
+			elsif ($table eq "EXTERNAL_LINKS") {
+				$self->DownloadData_XTRA($site, $savepath,
+				  "external-links-domain", "\)", "EXTERNAL_LINKS", "external-links-domain-dl");
+			}
+			elsif ($table eq "SOCIAL_ACTIVITY") {
+				$self->DownloadData_XTRA($site, $savepath,
+				  "social-activity", "x26", "SOCIAL_ACTIVITY", "social-activity-dl");
+			}
+            elsif ($table eq "LATEST_BACKLINKS") {
+                $self->DownloadData_XTRA($site, $savepath,
+				  "external-links-domain", "\)", "LATEST_BACKLINKS", "backlinks-latest-dl");
+            }
+			else {
+				my $finalUrl = $downloadUrls->{$table} ."&prop=ALL&db=%s&de=%s&more=true";
+				$finalUrl = sprintf($finalUrl, $self->{'_daterange'}->[0], $self->{'_daterange'}->[1]);
+				return $self->ExportData($finalUrl);
+			}
+		}
+	} else { 
+		return; 
+	}
+}
+
 # Downloads "unofficial" downloads based on the given URL.
 # *  @param $site    String   Site URL available in GWT Account.
 # *  @param $savepath  String   Optional path to save CSV to (no trailing slash!).
@@ -384,6 +420,39 @@ sub DownloadCSV_XTRA {
 		my $url = $self->{'service_uri'} . $dlUri . "?hl=%s&siteUrl=%s&security_token=%s&prop=ALL&db=%s&de=%s&more=true";
 		my $_url = sprintf($url, $self->{'_language'}, $site, url_escape $token, $self->{'_daterange'}->[0], $self->{'_daterange'}->[1]);
 		$self->SaveData($_url, $finalName);
+	} else { 
+		return; 
+	}
+}
+
+# Downloads "unofficial" downloads based on the given URL.
+# *  @param $site    String   Site URL available in GWT Account.
+# *  @param $savepath  String   Optional path to save CSV to (no trailing slash!).
+
+sub DownloadData_XTRA {
+	my ($self, $site, $savepath, $tokenUri, $tokenDelimiter, $filenamePrefix, $dlUri) = @_;
+	
+	if (!$savepath) {
+		die "no save path";
+	}
+	
+	if ($self->{'_logged_in'} == 1) {
+		my $uri = $self->{'service_uri'} . $tokenUri . "?hl=%s&siteUrl=%s";
+		my $_uri = sprintf($uri, $self->{'_language'}, $site);
+
+		my $token = $self->GetToken($_uri, $tokenDelimiter, $dlUri);
+
+		my $fn = $site;
+		$fn =~ s!https?://!!;
+		$fn =~ s!/!!g;
+
+		my $filename = "$fn-" . $self->{'_daterange'}->[0] . "-" . $self->{'_daterange'}->[1] . "--" . DateTime->now( time_zone => 'Europe/London' )->ymd . "-" . DateTime->now( time_zone => 'Europe/London' )->hms('');
+		my $finalName = "$savepath/$filenamePrefix-$filename.csv";
+		
+		my $url = $self->{'service_uri'} . $dlUri . "?hl=%s&siteUrl=%s&security_token=%s&prop=ALL&db=%s&de=%s&more=true";
+		my $_url = sprintf($url, $self->{'_language'}, $site, url_escape $token, $self->{'_daterange'}->[0], $self->{'_daterange'}->[1]);
+		
+		return $self->ExportData($_url);
 	} else { 
 		return; 
 	}
@@ -451,11 +520,11 @@ sub SaveData {
 	my $data = $self->GetData($finalUrl);
 
 	if (length $data > 1) {
-		$log->info("Success!!!");
+		# $log->info("Success!!!");
 		my $contents = decode 'UTF-8', $data;
 		# $log->info(Dumper($contents));
 
-		$log->info("Final name: $finalName");
+		# $log->info("Final name: $finalName");
 		
 		my $fh;
 		open($fh, '>', $finalName) or die "Couldn't open: $!";
@@ -465,7 +534,25 @@ sub SaveData {
 		return 1;
 	} else {
 		$log->info("Skipped $finalName");
-		push $self->{'_skipped'}, $finalName;
+		pu>{'_skipped'}, $finalNam || sh $e;
+		return;
+	}
+}
+
+#  *  Saves data to a CSV file based on the given URL.
+#  *
+#  *  @param $finalUrl   String   CSV Download URI.
+sub ExportData {
+	my ($self, $finalUrl) = @_;
+	my $data = $self->GetData($finalUrl);
+
+	if (length $data > 1) {
+        my $hr = Text::CSV::Slurp->load(string => $data);
+
+		return $hr;
+	} else {
+		$log->info("Skipped $finalUrl");
+		push $self->{'_skipped'}, $finalUrl;
 		return;
 	}
 }
