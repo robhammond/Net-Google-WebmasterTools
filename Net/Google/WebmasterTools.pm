@@ -140,21 +140,6 @@ sub SetTables {
 	}
 }
 
-# Returns array of downloaded filenames.
-# @return  Array   Array of filenames that have been written to disk.
-
-sub GetDownloadedFiles {
-	my $self = shift;
-	return $self->{'_downloaded'};
-}
-
-# Returns array of downloaded filenames.
-# *  @return  Array   Array of filenames that have been written to disk.
-
-sub GetSkippedFiles {
-	my $self = shift;
-	return $self->{'_skipped'};
-}
 
 # Attempts to log into the specified Google account.
 # 		 *  @param $email  String   User's Google email address.
@@ -234,7 +219,7 @@ sub GetData {
 # *  @return Mixed  Array with all site URLs registered in GWT account,
 # *                 or false (Boolean) if request failed.
 
-sub GetSites {
+sub get_sites {
 	my $self = shift;
 
 	if ($self->{'_logged_in'} == 1) {
@@ -343,6 +328,70 @@ sub DownloadCSV {
 # *  @param $site    String   Site URL available in GWT Account.
 # *  @param $savepath  String   Optional path to save CSV to (no trailing slash!).
 
+sub top_pages {
+	my ($self, $site) = @_;
+	if ($self->{'_logged_in'} == 1) {
+		# my $downloadUrls = $self->GetDownloadUrls($site);
+		my $_url = sprintf($self->{'service_uri'} . "downloads-list?hl=%s&siteUrl=%s", $self->{'_language'}, url_escape $site);
+		my $downloadList = $self->GetData($_url);
+
+		my $json = Mojo::JSON->new;
+
+		my $download_url = $json->decode($downloadList)->{'TOP_PAGES'};
+
+		my $finalUrl = $download_url ."&prop=ALL&db=%s&de=%s&more=true";
+		$finalUrl = sprintf($finalUrl, $self->{'_daterange'}->[0], $self->{'_daterange'}->[1]);
+		return $self->ExportData($finalUrl);
+	}
+}
+
+sub top_queries {
+	my ($self, $site) = @_;
+	if ($self->{'_logged_in'} == 1) {
+		# my $downloadUrls = $self->GetDownloadUrls($site);
+		my $_url = sprintf($self->{'service_uri'} . "downloads-list?hl=%s&siteUrl=%s", $self->{'_language'}, url_escape $site);
+		my $downloadList = $self->GetData($_url);
+
+		my $json = Mojo::JSON->new;
+
+		my $download_url = $json->decode($downloadList)->{'TOP_QUERIES'};
+
+		my $finalUrl = $download_url ."&prop=ALL&db=%s&de=%s&more=true";
+		$finalUrl = sprintf($finalUrl, $self->{'_daterange'}->[0], $self->{'_daterange'}->[1]);
+		return $self->ExportData($finalUrl);
+	}
+}
+
+sub content_errors {
+	my ($self, $site, $type) = @_;
+
+	my %type_map = (
+		dupe_meta_desc => 10,
+		long_meta_desc => 5,
+		short_meta_desc => 4,
+		missing_titles => 2,
+		dupe_titles => 9,
+	);
+
+	return unless $type_map{$type};
+
+	if ($self->{'_logged_in'} == 1) {
+		my $token_uri = 'html-suggestions';
+		my $dl_uri = 'content-problems-type-dl';
+
+		my $uri = $self->{'service_uri'} . $token_uri . "?hl=%s&siteUrl=%s&probtype=%s";
+		my $_uri = sprintf($uri, $self->{'_language'}, $site, $type_map{$type});
+
+		my $token = $self->_get_token($_uri, $dl_uri);
+
+		my $url = $self->{'service_uri'} . $dl_uri . "?hl=%s&siteUrl=%s&security_token=%s&probtype=%s";
+		my $_url = sprintf($url, $self->{'_language'}, $site, $token, $type_map{$type});
+
+		# may be worth adding some manipulation here to make pipe separated data into an array
+		return $self->ExportData($_url);
+	}
+}
+
 sub DownloadData {
 	my ($self, $site) = @_;
 
@@ -408,7 +457,7 @@ sub DownloadCSV_XTRA {
 		my $uri = $self->{'service_uri'} . $tokenUri . "?hl=%s&siteUrl=%s";
 		my $_uri = sprintf($uri, $self->{'_language'}, $site);
 
-		my $token = $self->GetToken($_uri, $tokenDelimiter, $dlUri);
+		my $token = $self->_get_token($_uri, $dlUri);
 
 		my $fn = $site;
 		$fn =~ s!https?://!!;
@@ -440,7 +489,7 @@ sub DownloadData_XTRA {
 		my $uri = $self->{'service_uri'} . $tokenUri . "?hl=%s&siteUrl=%s";
 		my $_uri = sprintf($uri, $self->{'_language'}, $site);
 
-		my $token = $self->GetToken($_uri, $tokenDelimiter, $dlUri);
+		my $token = $self->_get_token($_uri, $dlUri);
 
 		my $fn = $site;
 		$fn =~ s!https?://!!;
@@ -490,7 +539,7 @@ sub DownloadCSV_CrawlErrors {
 		# 				$type_param = "we";
 		# 			}
 		# 			$uri = self::SERVICEURI."crawl-errors?hl=en&siteUrl=$site&tid=$type_param";
-		# 			$token = self::GetToken($uri,"x26");
+		# 			$token = self::_get_token($uri,"x26");
 		# 			$finalName = "$savepath/CRAWL_ERRORS-$typename-$sortname-$filename.csv";
 		# 			$url = self::SERVICEURI."crawl-errors-dl?hl=%s&siteUrl=%s&security_token=%s&type=%s&sort=%s";
 		# 			$_url = sprintf($url, $this->_language, $site, $token, $typeid, $sortid);
@@ -500,7 +549,7 @@ sub DownloadCSV_CrawlErrors {
 		# }
 		# else {
 			my $uri = $self->{'service_uri'} . "crawl-errors?hl=en&siteUrl=$site&tid=$type_param";
-			my $token = $self->GetToken($uri, "x26");
+			my $token = $self->_get_token($uri, "x26");
 			my $finalName = "$savepath/CRAWL_ERRORS-$filename.csv";
 			my $url = $self->{'service_uri'} . "crawl-errors-new-dl?hl=%s&siteUrl=%s&security_token=%s&format=csv";
 			my $_url = sprintf(url_escape $url, $self->{'_language'}, $site, url_escape $token);
@@ -534,7 +583,7 @@ sub SaveData {
 		return 1;
 	} else {
 		$log->info("Skipped $finalName");
-		pu>{'_skipped'}, $finalNam || sh $e;
+		push $self->{'_skipped'}, $finalName;
 		return;
 	}
 }
@@ -547,6 +596,7 @@ sub ExportData {
 	my $data = $self->GetData($finalUrl);
 
 	if (length $data > 1) {
+
         my $hr = Text::CSV::Slurp->load(string => $data);
 
 		return $hr;
@@ -563,14 +613,16 @@ sub ExportData {
 # *  @param $delimiter  String   Trailing delimiter for the regex.
 # *  @return  String    Returns a security token.
 
-sub GetToken {
-	my ($self, $uri, $delimiter, $dlUri) = @_;
+sub _get_token {
+	my ($self, $uri, $dlUri) = @_;
 	my $match;
 	my $tmp = $self->GetData($uri);
 
-	if ($tmp =~ m{$dlUri.*?46security_token(.*?)'}si) {
+	# $log->info($dlUri);
+
+	if ($tmp =~ m{$dlUri.*?46security_token\\[0-9]{2}([^\\'\)]+)}si) {
 		my $sec_token = $1;
-		$sec_token =~ s!^\\+[0-9]{2}!!;
+		# $sec_token =~ s!^\\+[0-9]{2}!!;
 		$match = $sec_token;
 	}
 
