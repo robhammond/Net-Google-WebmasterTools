@@ -392,6 +392,44 @@ sub content_errors {
 	}
 }
 
+sub internal_links {
+	my ($self, $site) = @_;
+	if ($self->{'_logged_in'} == 1) {
+		my $token_uri = 'internal-links';
+		my $dl_uri = 'internal-links-dl';
+
+		my $uri = $self->{'service_uri'} . $token_uri . "?hl=%s&siteUrl=%s";
+		my $_uri = sprintf($uri, $self->{'_language'}, $site);
+
+		my $token = $self->_get_token($_uri, $dl_uri);
+
+		my $url = $self->{'service_uri'} . $dl_uri . "?hl=%s&siteUrl=%s&security_token=%s&prop=ALL&more=true";
+		my $_url = sprintf($url, $self->{'_language'}, $site, $token);
+
+		# may be worth adding some manipulation here to make pipe separated data into an array
+		return $self->ExportData($_url);
+	}
+}
+
+sub external_links {
+	my ($self, $site) = @_;
+	if ($self->{'_logged_in'} == 1) {
+		my $token_uri = 'external-links-domain';
+		my $dl_uri = 'external-links-domain-dl';
+
+		my $uri = $self->{'service_uri'} . $token_uri . "?hl=%s&siteUrl=%s";
+		my $_uri = sprintf($uri, $self->{'_language'}, $site);
+
+		my $token = $self->_get_token($_uri, $dl_uri);
+
+		my $url = $self->{'service_uri'} . $dl_uri . "?hl=%s&siteUrl=%s&security_token=%s&prop=ALL&more=true";
+		my $_url = sprintf($url, $self->{'_language'}, $site, $token);
+
+		# may be worth adding some manipulation here to make pipe separated data into an array
+		return $self->ExportData($_url);
+	}
+}
+
 sub DownloadData {
 	my ($self, $site) = @_;
 
